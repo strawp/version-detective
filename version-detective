@@ -1,0 +1,114 @@
+#!/usr/bin/env python
+# Use static files and git to work out a web application's middleware version
+
+import argparse, os, sys, git
+from git import Repo
+
+class Progress(git.remote.RemoteProgress):
+  def line_dropped(self, line):
+    print line
+  def update(self, *args):
+    print self._cur_line
+
+# Clone a repo / branch
+def clone( settings ):
+  
+  print 'Using git URL: ' + settings['git']
+  repo_name = settings['git'].split('/')[-1].replace('.git','')
+  if 'branch' in settings.keys():
+    repo_name += settings['branch']
+
+  # Make repos dir under the dir of this script
+  repo_dir = os.path.dirname(os.path.realpath(__file__)) + '/repos/' + repo_name
+  if os.path.isdir( repo_dir ):
+    print repo_dir + ' already exists'
+    repo = Repo(repo_dir) 
+    o = repo.remotes.origin
+    o.pull(progress=Progress())
+  else:
+    print 'Making dir ' + repo_dir
+    os.makedirs( repo_dir )
+    print 'Cloning ' + settings['git'] + ' into '+repo_dir+'...'
+    repo = Repo.clone_from(settings['git'], repo_dir, progress=Progress())
+
+  return repo
+
+def analyse( url, settings ):
+  
+  # Clone repo
+  repo = clone( settings )
+
+  # Produce list of static files from git log
+  log = repo.git.log()
+  print log
+
+  # Check for presence of static files, narrowing version down to specific commits
+
+  # Check for exact matches of files present to further narrow down commits
+
+
+def main():
+  
+  # Command line options
+  parser = argparse.ArgumentParser(description="Determine a site's middleware version through analysis of it's static files")
+  
+  # Tool configuration
+  parser.add_argument("-m", "--middleware", help="Middleware project to check out")
+  parser.add_argument("-g", "--git", help="Check out this git URL to analyse (if not using --middleware)")
+  parser.add_argument("-b", "--branch", help="Which branch of the git repo to use (if not using --middleware)")
+  parser.add_argument("-w", "--webroot", help="Directory within the project which corresponds to the web root for static files (if not using --middleware)")
+  parser.add_argument("-u", "--url", help="URL of site to compare against")
+  args = parser.parse_args()
+  
+  if len( sys.argv)==1:
+    parser.print_help()
+    return
+
+  # Projects and where their web root is
+  middleware = {
+    'drupal9': {
+      'webroot': 'core',
+      'git': 'https://git.drupal.org/project/drupal.git',
+      'branch': '9.x'
+    },
+    'drupal8': {
+      'webroot': 'core',
+      'git': 'https://git.drupal.org/project/drupal.git',
+      'branch': '8.6.x'
+    },
+    'drupal7': {
+      'webroot': 'core',
+      'git': 'https://git.drupal.org/project/drupal.git',
+      'branch': '7.x'
+    },
+    'wordpress': {
+      'git': 'https://github.com/WordPress/WordPress.git'
+    }
+  }
+
+  if not args.url:
+    print 'Requires a target URL --url'
+    return
+  
+  if args.middleware and args.middleware in middleware.keys():
+    settings = middleware[args.middleware]
+  elif not args.git:
+    print 'Requires at least --git or --middleware'
+    return
+  else:
+    settings = {}
+
+  if args.git:
+    settings['git'] = args.git
+  
+  if args.branch:
+    settings['branch'] = args.branch
+  
+  if args.webroot:
+    settings['webroot'] = args.webroot
+
+  analyse( args.url, settings )
+
+if __name__ == "__main__":
+  main()
+
