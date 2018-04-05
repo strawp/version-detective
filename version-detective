@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # Use static files and git to work out a web application's middleware version
 
-import argparse, os, sys, git
+import argparse, os, sys, git, collections, re
 from git import Repo
 
 class Progress(git.remote.RemoteProgress):
@@ -33,16 +33,60 @@ def clone( settings ):
 
   return repo
 
+
 def analyse( url, settings ):
   
   # Clone repo
   repo = clone( settings )
 
   # Produce list of static files from git log
-  log = repo.git.log()
-  print log
+  staticsearch = r'\.(js|css|txt|md|html|xml)$'
+  # staticsearch = r'\.(js|css|txt|md|html|gif|png|jpg|jpeg)$'
+  
+  # staticfiles keyed by file path, added in chronological order
+  # Each entry in staticfiles is a list of commit hashes that the file can be found in
+  staticfiles = collections.OrderedDict()
+  
+  # filesincommit tracks add / remove in order to determine which files are present in any given commit
+  filesincommit = []
+
+  print 'Building static files index...'
+
+  commits = list(repo.iter_commits())
+  commits.reverse()
+  count = 1
+  for commit in commits:
+    filesincommit = []
+    parent = commit.parents[0] if commit.parents else 'HEAD~1'
+    types = ['A']
+    for t in types:
+      for diff in commit.diff(parent).iter_change_type(t):
+        
+        # Check this is a static file in the web root
+        if 'webroot' in settings.keys():
+          if not re.match( '^' + settings['webroot'], diff.b_path ): continue
+        if not re.search( staticsearch, diff.b_path ): continue
+
+        # Add a file to current list
+        if t in ['A','R']:
+          filesincommit.append(diff.b_path)
+        
+      if len( filesincommit ) > 0:
+        print 'Commit ' + str( count ) + '/' + str(len(commits)) + '. Static files in commit: '+str(len(filesincommit))+'\r',
+        sys.stdout.flush()
+      count+=1
+    
+    # print filesincommit
+    for f in filesincommit:
+      if f not in staticfiles.keys():
+        staticfiles[f] = []
+      staticfiles[f].append(commit.hexsha)
+
+    print staticfiles
+
 
   # Check for presence of static files, narrowing version down to specific commits
+  print str( len( staticfiles ) ) + ' static files found'
 
   # Check for exact matches of files present to further narrow down commits
 
