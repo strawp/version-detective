@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # Use static files and git to work out a web application's middleware version
 
-import argparse, os, sys, git, collections, re
+import argparse, os, sys, git, re, subprocess, requests, difflib
 from git import Repo
 
 class Progress(git.remote.RemoteProgress):
@@ -10,85 +10,151 @@ class Progress(git.remote.RemoteProgress):
   def update(self, *args):
     print self._cur_line
 
-# Clone a repo / branch
-def clone( settings ):
-  
-  print 'Using git URL: ' + settings['git']
-  repo_name = settings['git'].split('/')[-1].replace('.git','')
-  if 'branch' in settings.keys():
-    repo_name += settings['branch']
+class VersionDetective:
+ 
+  def __init__( self, url, settings ):
+    if 'webroot' not in settings.keys(): settings['webroot'] = ''
+    self.settings = settings
+    self.url = url
 
-  # Make repos dir under the dir of this script
-  repo_dir = os.path.dirname(os.path.realpath(__file__)) + '/repos/' + repo_name
-  if os.path.isdir( repo_dir ):
-    print repo_dir + ' already exists'
-    repo = Repo(repo_dir) 
-    o = repo.remotes.origin
-    o.pull(progress=Progress())
-  else:
-    print 'Making dir ' + repo_dir
-    os.makedirs( repo_dir )
-    print 'Cloning ' + settings['git'] + ' into '+repo_dir+'...'
-    repo = Repo.clone_from(settings['git'], repo_dir, progress=Progress())
-
-  return repo
-
-
-def analyse( url, settings ):
-  
-  # Clone repo
-  repo = clone( settings )
-
-  # Produce list of static files from git log
-  staticsearch = r'\.(js|css|txt|md|html|xml)$'
-  # staticsearch = r'\.(js|css|txt|md|html|gif|png|jpg|jpeg)$'
-  
-  # staticfiles keyed by file path, added in chronological order
-  # Each entry in staticfiles is a list of commit hashes that the file can be found in
-  staticfiles = collections.OrderedDict()
-  
-  # filesincommit tracks add / remove in order to determine which files are present in any given commit
-  filesincommit = []
-
-  print 'Building static files index...'
-
-  commits = list(repo.iter_commits())
-  commits.reverse()
-  count = 1
-  for commit in commits:
-    filesincommit = []
-    parent = commit.parents[0] if commit.parents else 'HEAD~1'
-    types = ['A']
-    for t in types:
-      for diff in commit.diff(parent).iter_change_type(t):
-        
-        # Check this is a static file in the web root
-        if 'webroot' in settings.keys():
-          if not re.match( '^' + settings['webroot'], diff.b_path ): continue
-        if not re.search( staticsearch, diff.b_path ): continue
-
-        # Add a file to current list
-        if t in ['A','R']:
-          filesincommit.append(diff.b_path)
-        
-      if len( filesincommit ) > 0:
-        print 'Commit ' + str( count ) + '/' + str(len(commits)) + '. Static files in commit: '+str(len(filesincommit))+'\r',
-        sys.stdout.flush()
-      count+=1
+  # Clone a repo / branch
+  def clone( self ):
     
-    # print filesincommit
-    for f in filesincommit:
-      if f not in staticfiles.keys():
-        staticfiles[f] = []
-      staticfiles[f].append(commit.hexsha)
+    print 'Using git URL: ' + self.settings['git']
+    repo_name = self.settings['git'].split('/')[-1].replace('.git','')
+    if 'branch' in self.settings.keys():
+      repo_name += self.settings['branch']
 
-    print staticfiles
+    # Make repos dir under the dir of this script
+    repo_dir = os.path.dirname(os.path.realpath(__file__)) + '/repos/' + repo_name
+    if os.path.isdir( repo_dir ):
+      print repo_dir + ' already exists'
+      repo = Repo(repo_dir) 
+      o = repo.remotes.origin
+      o.pull(progress=Progress())
+    else:
+      print 'Making dir ' + repo_dir
+      os.makedirs( repo_dir )
+      print 'Cloning ' + self.settings['git'] + ' into '+repo_dir+'...'
+      repo = Repo.clone_from(self.settings['git'], repo_dir, progress=Progress())
+
+    return repo
 
 
-  # Check for presence of static files, narrowing version down to specific commits
-  print str( len( staticfiles ) ) + ' static files found'
+  def get_most_recent_matching_commit( self, fname ):
+    
+    print 'Finding a matching commit for ' + fname
+    
+    furl = self.url + '/' + self.settings['webroot'] + '/' + fname
 
-  # Check for exact matches of files present to further narrow down commits
+    # Get remote file content
+    r = requests.get(furl)
+    remotecontent = r.text.splitlines()
+
+    # Get list of commits relating to this file
+    # git log --pretty=format:"%H" index.php
+    p = subprocess.Popen(['git','log','--pretty=format:"%H"',fname], stdout=subprocess.PIPE, cwd=self.repo.working_dir, universal_newlines=False)
+    out, err = p.communicate()
+    commits = out.splitlines()
+
+    for c in commits:
+      # git show 5322be300a27460ae28fb79772d55f946179c84c:index.php
+      c = c.replace('"','')
+      print c + ':' + fname
+      p = subprocess.Popen(['git','show',c+':'+fname], stdout=subprocess.PIPE, cwd=self.repo.working_dir, universal_newlines=False)
+      out, err = p.communicate()
+      content = out.splitlines()
+  
+      try:
+        diff = difflib.unified_diff(remotecontent,content)
+        lines = []
+        for d in diff:
+          lines.append(str(d))
+        if len( lines ) == 0:
+          return c
+      except:
+        continue
+    return False
+
+
+  def analyse( self ):
+    
+    # Clone repo
+    self.repo = self.clone()
+
+    # Produce list of static files from git log
+
+    print 'Building static files index...'
+    filesregex = r'\.(txt|md|js|css|html|xml)$'
+
+    pipes = []
+    pipes.append(['git','log','--name-status','--diff-filter=AM'])
+    pipes.append(['grep','^\(commit\|A\)\W'])
+    procs = []
+    for p in pipes:
+      
+      # Any stdout available?
+      if len( procs ) > 0:
+        out = procs[-1].stdout
+      else:
+        out = None
+
+      procs.append( subprocess.Popen(p, stdout=subprocess.PIPE, cwd=self.repo.working_dir, stdin=out, universal_newlines=False) )
+
+    out,err = procs[-1].communicate()
+
+    staticfiles = []
+
+    commit = None
+    for line in out.splitlines():
+      m = re.match('commit\W+(\w+)',line)
+      if m:
+        commit = m.group(1)
+        continue
+      m = re.match('A\W+(.+)', line)
+      if m:
+        fname = m.group(1)
+        if 'webroot' in self.settings.keys() and not re.match( self.settings['webroot'], fname ): continue
+        if re.search( filesregex, fname ):
+          if fname not in staticfiles:
+            staticfiles.append(fname)
+   
+    validcommits = {}
+    print str(len(staticfiles)) + ' static files found'
+    for f in staticfiles:
+      if len( validcommits ) >= 10: break
+      furl = self.url + '/' + f
+      print furl,
+      r = requests.head(furl)
+      print r.status_code
+      if r.status_code == 200:
+       
+        # Get 
+        commit = self.get_most_recent_matching_commit( f )
+        if commit:
+          print 'Matching commit: ' + commit
+          if commit not in validcommits.keys(): validcommits[commit] = 0
+          validcommits[commit] += 1
+      
+    # Get dates for each of these commits
+    dates = {}
+    for c in validcommits.keys():
+      p = subprocess.Popen(['git','show','-s','--format=%ci',c], stdout=subprocess.PIPE, cwd=self.repo.working_dir, universal_newlines=False)
+      out, err = p.communicate()
+      date = out.strip()
+      dates[date] = c
+    
+    dks = dates.keys()
+    dks.sort( reverse=True )
+    for d in dks:
+      c = dates[d]
+      print d + ': ' + c + ' ('+str(validcommits[c])+' matching files)'
+    return
+
+    # Check for presence of static files, narrowing version down to specific commits
+    print str( len( staticfiles ) ) + ' static files found'
+
+    # Check for exact matches of files present to further narrow down commits
 
 
 def main():
@@ -151,7 +217,8 @@ def main():
   if args.webroot:
     settings['webroot'] = args.webroot
 
-  analyse( args.url, settings )
+  detective = VersionDetective( args.url, settings )
+  detective.analyse()
 
 if __name__ == "__main__":
   main()
