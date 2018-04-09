@@ -1,0 +1,20 @@
+{
+  "drupal9": {
+    "webroot": "core",
+    "git": "https://git.drupal.org/project/drupal.git",
+    "branch": "9.x"
+  },
+  "drupal8": {
+    "webroot": "core",
+    "git": "https://git.drupal.org/project/drupal.git",
+    "branch": "8.6.x"
+  },
+  "drupal7": {
+    "webroot": "core",
+    "git": "https://git.drupal.org/project/drupal.git",
+    "branch": "7.x"
+  },
+  "wordpress": {
+    "git": "https://github.com/WordPress/WordPress.git"
+  }
+}

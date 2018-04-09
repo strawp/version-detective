@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 # Use static files and git to work out a web application's middleware version
+# Credit to https://github.com/cornerpirate/git-version for the core idea
 
-import argparse, os, sys, git, re, subprocess, requests, difflib
+import argparse, os, sys, git, re, subprocess, requests, difflib, json
 from git import Repo
 
 class Progress(git.remote.RemoteProgress):
@@ -43,6 +44,7 @@ class VersionDetective:
 
   def get_most_recent_matching_commit( self, fname ):
     
+    print ''
     print 'Finding a matching commit for ' + fname
     
     furl = self.url + '/' + self.settings['webroot'] + '/' + fname
@@ -89,7 +91,7 @@ class VersionDetective:
 
     pipes = []
     pipes.append(['git','log','--name-status','--diff-filter=AM'])
-    pipes.append(['grep','^\(commit\|A\)\W'])
+    pipes.append(['grep','^\(commit\|A\|M\)\W'])
     procs = []
     for p in pipes:
       
@@ -111,7 +113,7 @@ class VersionDetective:
       if m:
         commit = m.group(1)
         continue
-      m = re.match('A\W+(.+)', line)
+      m = re.match('[AM]\W+(.+)', line)
       if m:
         fname = m.group(1)
         if 'webroot' in self.settings.keys() and not re.match( self.settings['webroot'], fname ): continue
@@ -120,9 +122,11 @@ class VersionDetective:
             staticfiles.append(fname)
    
     validcommits = {}
+    missing = {}
+    filecount = 0
     print str(len(staticfiles)) + ' static files found'
     for f in staticfiles:
-      if len( validcommits ) >= 10: break
+      if filecount >= 10: break
       furl = self.url + '/' + f
       print furl,
       r = requests.head(furl)
@@ -132,9 +136,16 @@ class VersionDetective:
         # Get 
         commit = self.get_most_recent_matching_commit( f )
         if commit:
-          print 'Matching commit: ' + commit
-          if commit not in validcommits.keys(): validcommits[commit] = 0
-          validcommits[commit] += 1
+          print 'MATCH in: ' + commit
+          print ''
+          if commit not in validcommits.keys(): validcommits[commit] = []
+          validcommits[commit].append(furl)
+          filecount += 1
+
+      # record missing files
+      elif r.status_code == 404 and len(validcommits) == 0:
+        if commit not in missing.keys(): missing[commit] = []
+        missing[commit] = furl
       
     # Get dates for each of these commits
     dates = {}
@@ -146,15 +157,20 @@ class VersionDetective:
     
     dks = dates.keys()
     dks.sort( reverse=True )
+    print ''
+    print 'Found files matching these commits:'
+    mostrecent = None
     for d in dks:
+      if not mostrecent: mostrecent = d
       c = dates[d]
-      print d + ': ' + c + ' ('+str(validcommits[c])+' matching files)'
+      print ''
+      print d + ': ' + c + ' ('+str(len(validcommits[c]))+' matching files)'
+      for f in validcommits[c]:
+        print ' - ' + f
+    
+    print ''
+    print 'Version Detective concludes that ' + self.url + ' is running code that was last updated at ' + mostrecent
     return
-
-    # Check for presence of static files, narrowing version down to specific commits
-    print str( len( staticfiles ) ) + ' static files found'
-
-    # Check for exact matches of files present to further narrow down commits
 
 
 def main():
@@ -164,6 +180,7 @@ def main():
   
   # Tool configuration
   parser.add_argument("-m", "--middleware", help="Middleware project to check out")
+  parser.add_argument("-l", "--list-middleware", action="store_true", help="List middleware that Version Detective knows about")
   parser.add_argument("-g", "--git", help="Check out this git URL to analyse (if not using --middleware)")
   parser.add_argument("-b", "--branch", help="Which branch of the git repo to use (if not using --middleware)")
   parser.add_argument("-w", "--webroot", help="Directory within the project which corresponds to the web root for static files (if not using --middleware)")
@@ -175,26 +192,17 @@ def main():
     return
 
   # Projects and where their web root is
-  middleware = {
-    'drupal9': {
-      'webroot': 'core',
-      'git': 'https://git.drupal.org/project/drupal.git',
-      'branch': '9.x'
-    },
-    'drupal8': {
-      'webroot': 'core',
-      'git': 'https://git.drupal.org/project/drupal.git',
-      'branch': '8.6.x'
-    },
-    'drupal7': {
-      'webroot': 'core',
-      'git': 'https://git.drupal.org/project/drupal.git',
-      'branch': '7.x'
-    },
-    'wordpress': {
-      'git': 'https://github.com/WordPress/WordPress.git'
-    }
-  }
+  with open('middleware.json') as f:
+    middleware = json.loads(f.read())
+
+  if args.list_middleware:
+    print 'Known middleware:'
+    for key, item in middleware.iteritems():
+      print key + ' ('+item['git'],
+      if 'branch' in item.keys():
+        print ':' + item['branch'],
+      print ')'
+    return
 
   if not args.url:
     print 'Requires a target URL --url'
