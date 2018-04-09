@@ -16,5 +16,21 @@
   },
   "wordpress": {
     "git": "https://github.com/WordPress/WordPress.git"
+  },
+  "magento2": {
+    "git": "https://github.com/magento/magento2.git"
+  },
+  "phpmyadmin": {
+    "git": "https://github.com/phpmyadmin/phpmyadmin.git"
+  },
+  "phpbb": {
+    "git": "https://github.com/phpbb/phpbb.git",
+    "webroot": "phpBB"
+  },
+  "mediawiki": {
+    "git": "https://github.com/wikimedia/mediawiki.git"
+  },
+  "joomla": {
+    "git": "https://github.com/joomla/joomla-cms.git"
   }
 }
