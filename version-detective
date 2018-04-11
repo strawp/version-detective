@@ -50,7 +50,9 @@ class VersionDetective:
     print ''
     print 'Finding a matching commit for ' + fname
     
-    furl = self.url + '/' + self.settings['webroot'] + '/' + fname
+    # furl = self.url + '/' + self.settings['webroot'] + '/' + fname
+    furl = self.get_file_url( fname )
+    if not furl: return False
 
     # Get remote file content
     r = requests.get(furl)
@@ -88,6 +90,16 @@ class VersionDetective:
     out, err = p.communicate()
     self.head_id = out.strip()
     return self.head_id
+
+  def get_file_url( self, filepath ):
+    wr = self.settings['webroot']
+    if wr != '':
+      if not filepath.startswith( wr ):
+        return False
+      else:
+        filepath = filepath.replace( wr, '' )
+    return self.url + '/' + filepath
+      
 
   def analyse( self ):
     
@@ -139,7 +151,9 @@ class VersionDetective:
     print str(len(staticfiles)) + ' static files found'
     for f in staticfiles:
       if filecount >= 10: break
-      furl = self.url + '/' + f
+      # furl = self.url + '/' + f.replace(self.settings['webroot'],'')
+      furl = self.get_file_url( f )
+      if not furl: continue
       print furl,
       r = requests.head(furl)
       print r.status_code
@@ -186,20 +200,32 @@ class VersionDetective:
         print ' - ' + f
     
     print ''
-    print 'Version Detective concludes that ' + self.url + ' is running code that was last updated at ' + mostrecent
+    print 'Version Detective concludes that ' + self.url + ' is probably running code no older than ' + mostrecent
 
     # Is this the current head?
     if currentcommit == self.get_head_id():
       print 'This is the current HEAD commit (most up to date)'
     else:
-      print 'This is not the most recent version. Files changed between this and the current HEAD:'
       p = subprocess.Popen(['git','diff','--name-only', currentcommit, 'HEAD'], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
-      out, err = p.communicate()
-      print out
+      changedfiles = p.communicate()[0].splitlines()
+      print 'This is not the current HEAD commit. '+str(len(changedfiles))+' files were changed between this and the current HEAD.'
+      
+
+      # Were any static files changed between current commit and HEAD? If not, current commit could be HEAD
+      changedstatic = []
+      for f in changedfiles:
+        f = f.strip()
+        if re.search( filesregex, f ): changedstatic.append(f)
+
+      if len( changedstatic ) == 0:
+        print 'Note that no static files were changed between the current commit and HEAD, so the remote commit could be HEAD, just not detectable through static file analysis.'
+
+      print ''
       print 'More details:'
-      print 'Complete diff between versions: git --git-dir='+self.working_dir+'/.git diff ' + currentcommit + ' HEAD'
-      print 'Diff of just changes in PHP files: git --git-dir='+self.working_dir+'/.git diff ' + currentcommit + ' HEAD -- \'*.php\''
-      print 'Changelog between versions: git --git-dir='+self.working_dir+'/.git log ' + currentcommit + '...HEAD'
+      print ' - List files changed between commits: git --git-dir='+self.working_dir+'/.git diff --name-only ' + currentcommit + ' HEAD'
+      print ' - Complete diff between versions: git --git-dir='+self.working_dir+'/.git diff ' + currentcommit + ' HEAD'
+      print ' - Diff of just changes in PHP files: git --git-dir='+self.working_dir+'/.git diff ' + currentcommit + ' HEAD -- \'*.php\''
+      print ' - Changelog between versions: git --git-dir='+self.working_dir+'/.git log --name-status ' + currentcommit + '...HEAD'
     return
 
 
