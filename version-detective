@@ -2,14 +2,8 @@
 # Use static files and git to work out a web application's middleware version
 # Credit to https://github.com/cornerpirate/git-version for the core idea
 
-import argparse, os, sys, git, re, subprocess, requests, difflib, json
+import argparse, os, sys, re, subprocess, requests, difflib, json
 from git import Repo
-
-class Progress(git.remote.RemoteProgress):
-  def line_dropped(self, line):
-    print line
-  def update(self, *args):
-    print self._cur_line
 
 class VersionDetective:
  
@@ -17,6 +11,7 @@ class VersionDetective:
     if 'webroot' not in settings.keys(): settings['webroot'] = ''
     self.settings = settings
     self.url = url
+    self.head_id = None
 
   # Clone a repo / branch
   def clone( self ):
@@ -25,21 +20,29 @@ class VersionDetective:
     repo_name = self.settings['git'].split('/')[-1].replace('.git','')
     if 'branch' in self.settings.keys():
       repo_name += self.settings['branch']
+      branch = self.settings['branch']
+    else:
+      branch = 'master'
 
     # Make repos dir under the dir of this script
     repo_dir = os.path.dirname(os.path.realpath(__file__)) + '/repos/' + repo_name
     if os.path.isdir( repo_dir ):
       print repo_dir + ' already exists'
-      repo = Repo(repo_dir) 
-      o = repo.remotes.origin
-      o.pull(progress=Progress())
+      p = subprocess.Popen(['git','pull','origin', branch], stdout=subprocess.PIPE, cwd=repo_dir, universal_newlines=False)
     else:
       print 'Making dir ' + repo_dir
       os.makedirs( repo_dir )
       print 'Cloning ' + self.settings['git'] + ' into '+repo_dir+'...'
-      repo = Repo.clone_from(self.settings['git'], repo_dir, progress=Progress())
+      p = subprocess.Popen(['git','clone',self.settings['git'], repo_dir], stdout=subprocess.PIPE, universal_newlines=False)
+    
+    self.working_dir = repo_dir
+    while True:
+      line = p.stdout.readline().rstrip()
+      if not line:
+        break
+      print line
 
-    return repo
+    return True
 
 
   def get_most_recent_matching_commit( self, fname ):
@@ -55,7 +58,7 @@ class VersionDetective:
 
     # Get list of commits relating to this file
     # git log --pretty=format:"%H" index.php
-    p = subprocess.Popen(['git','log','--pretty=format:"%H"',fname], stdout=subprocess.PIPE, cwd=self.repo.working_dir, universal_newlines=False)
+    p = subprocess.Popen(['git','log','--pretty=format:"%H"',fname], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
     out, err = p.communicate()
     commits = out.splitlines()
 
@@ -63,7 +66,7 @@ class VersionDetective:
       # git show 5322be300a27460ae28fb79772d55f946179c84c:index.php
       c = c.replace('"','')
       print c + ':' + fname
-      p = subprocess.Popen(['git','show',c+':'+fname], stdout=subprocess.PIPE, cwd=self.repo.working_dir, universal_newlines=False)
+      p = subprocess.Popen(['git','show',c+':'+fname], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
       out, err = p.communicate()
       content = out.splitlines()
   
@@ -78,11 +81,20 @@ class VersionDetective:
         continue
     return False
 
+  def get_head_id( self ):
+    if self.head_id:
+      return self.head_id
+    p = subprocess.Popen(['git','rev-parse','HEAD'], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
+    out, err = p.communicate()
+    self.head_id = out.strip()
+    return self.head_id
 
   def analyse( self ):
     
     # Clone repo
-    self.repo = self.clone()
+    if not self.clone():
+      print 'clone / pull failed. Quitting'
+      return False
 
     # Produce list of static files from git log
 
@@ -101,7 +113,7 @@ class VersionDetective:
       else:
         out = None
 
-      procs.append( subprocess.Popen(p, stdout=subprocess.PIPE, cwd=self.repo.working_dir, stdin=out, universal_newlines=False) )
+      procs.append( subprocess.Popen(p, stdout=subprocess.PIPE, cwd=self.working_dir, stdin=out, universal_newlines=False) )
 
     out,err = procs[-1].communicate()
 
@@ -117,7 +129,7 @@ class VersionDetective:
       if m:
         fname = m.group(1)
         if 'webroot' in self.settings.keys() and not re.match( self.settings['webroot'], fname ): continue
-        if re.search( filesregex, fname ):
+        if re.search( filesregex, fname, re.IGNORECASE ):
           if fname not in staticfiles:
             staticfiles.append(fname)
    
@@ -141,6 +153,9 @@ class VersionDetective:
           if commit not in validcommits.keys(): validcommits[commit] = []
           validcommits[commit].append(furl)
           filecount += 1
+        else:
+          print 'NO MATCH'
+          print ''
 
       # record missing files
       elif r.status_code == 404 and len(validcommits) == 0:
@@ -150,7 +165,7 @@ class VersionDetective:
     # Get dates for each of these commits
     dates = {}
     for c in validcommits.keys():
-      p = subprocess.Popen(['git','show','-s','--format=%ci',c], stdout=subprocess.PIPE, cwd=self.repo.working_dir, universal_newlines=False)
+      p = subprocess.Popen(['git','show','-s','--format=%ci',c], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
       out, err = p.communicate()
       date = out.strip()
       dates[date] = c
@@ -161,7 +176,9 @@ class VersionDetective:
     print 'Found files matching these commits:'
     mostrecent = None
     for d in dks:
-      if not mostrecent: mostrecent = d
+      if not mostrecent: 
+        mostrecent = d
+        currentcommit = dates[d]
       c = dates[d]
       print ''
       print d + ': ' + c + ' ('+str(len(validcommits[c]))+' matching files)'
@@ -170,6 +187,19 @@ class VersionDetective:
     
     print ''
     print 'Version Detective concludes that ' + self.url + ' is running code that was last updated at ' + mostrecent
+
+    # Is this the current head?
+    if currentcommit == self.get_head_id():
+      print 'This is the current HEAD commit (most up to date)'
+    else:
+      print 'This is not the most recent version. Files changed between this and the current HEAD:'
+      p = subprocess.Popen(['git','diff','--name-only', currentcommit, 'HEAD'], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
+      out, err = p.communicate()
+      print out
+      print 'More details:'
+      print 'Complete diff between versions: git --git-dir='+self.working_dir+'/.git diff ' + currentcommit + ' HEAD'
+      print 'Diff of just changes in PHP files: git --git-dir='+self.working_dir+'/.git diff ' + currentcommit + ' HEAD -- \'*.php\''
+      print 'Changelog between versions: git --git-dir='+self.working_dir+'/.git log ' + currentcommit + '...HEAD'
     return
 
 

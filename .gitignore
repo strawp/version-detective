@@ -5,6 +5,9 @@ __pycache__/
 
 repos/
 
+# vim swp
+*.swp
+
 # C extensions
 *.so
 
