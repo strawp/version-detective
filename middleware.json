@@ -32,5 +32,17 @@
   },
   "joomla": {
     "git": "https://github.com/joomla/joomla-cms.git"
+  },
+  "umbraco": {
+    "git": "https://github.com/umbraco/Umbraco-CMS.git",
+    "branch": "v8/contrib",
+    "webroot": "src/Umbraco.Web.UI.Client/src",
+    "urlappend": "/umbraco"
+  },
+  "umbraco7": {
+    "git": "https://github.com/umbraco/Umbraco-CMS.git",
+    "branch": "main-v7",
+    "webroot": "src/Umbraco.Web.UI.Client/src",
+    "urlappend": "/umbraco"
   }
 }

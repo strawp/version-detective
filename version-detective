@@ -8,17 +8,24 @@ from git import Repo
 class VersionDetective:
  
   def __init__( self, url, settings ):
-    if 'webroot' not in settings.keys(): settings['webroot'] = ''
+    if 'webroot' not in list(settings.keys()): settings['webroot'] = ''
     self.settings = settings
     self.url = url
+    if 'urlappend' in self.settings:
+      self.url += self.settings['urlappend']
     self.head_id = None
+    self.headers = {}
+    if 'header' in self.settings:
+      for h in self.settings['header']:
+        name,value = h.split(':')
+        self.headers[name] = value.strip()
 
   # Clone a repo / branch
   def clone( self ):
     
-    print 'Using git URL: ' + self.settings['git']
+    print('Using git URL: ' + self.settings['git'])
     repo_name = self.settings['git'].split('/')[-1].replace('.git','')
-    if 'branch' in self.settings.keys():
+    if 'branch' in list(self.settings.keys()):
       repo_name += self.settings['branch']
       branch = self.settings['branch']
     else:
@@ -27,12 +34,12 @@ class VersionDetective:
     # Make repos dir under the dir of this script
     repo_dir = os.path.dirname(os.path.realpath(__file__)) + '/repos/' + repo_name
     if os.path.isdir( repo_dir ):
-      print repo_dir + ' already exists'
+      print(repo_dir + ' already exists')
       p = subprocess.Popen(['git','pull','origin', branch], stdout=subprocess.PIPE, cwd=repo_dir, universal_newlines=False)
     else:
-      print 'Making dir ' + repo_dir
+      print('Making dir ' + repo_dir)
       os.makedirs( repo_dir )
-      print 'Cloning ' + self.settings['git'] + ' into '+repo_dir+'...'
+      print('Cloning ' + self.settings['git'] + ' into '+repo_dir+'...')
       p = subprocess.Popen(['git','clone',self.settings['git'], repo_dir], stdout=subprocess.PIPE, universal_newlines=False)
     
     self.working_dir = repo_dir
@@ -40,37 +47,37 @@ class VersionDetective:
       line = p.stdout.readline().rstrip()
       if not line:
         break
-      print line
+      print(line)
 
     return True
 
 
   def get_most_recent_matching_commit( self, fname ):
     
-    print ''
-    print 'Finding a matching commit for ' + fname
+    print('')
+    print('Finding a matching commit for ' + fname)
     
     # furl = self.url + '/' + self.settings['webroot'] + '/' + fname
     furl = self.get_file_url( fname )
     if not furl: return False
 
     # Get remote file content
-    r = requests.get(furl)
+    r = requests.get(furl, headers=self.headers)
     remotecontent = r.text.splitlines()
 
     # Get list of commits relating to this file
     # git log --pretty=format:"%H" index.php
     p = subprocess.Popen(['git','log','--pretty=format:"%H"',fname], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
     out, err = p.communicate()
-    commits = out.splitlines()
+    commits = out.decode('utf8').splitlines()
 
     for c in commits:
       # git show 5322be300a27460ae28fb79772d55f946179c84c:index.php
       c = c.replace('"','')
-      print c + ':' + fname
+      print(c + ':' + fname)
       p = subprocess.Popen(['git','show',c+':'+fname], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
       out, err = p.communicate()
-      content = out.splitlines()
+      content = out.decode('utf8').splitlines()
   
       try:
         diff = difflib.unified_diff(remotecontent,content)
@@ -88,7 +95,7 @@ class VersionDetective:
       return self.head_id
     p = subprocess.Popen(['git','rev-parse','HEAD'], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
     out, err = p.communicate()
-    self.head_id = out.strip()
+    self.head_id = out.decode('utf8').strip()
     return self.head_id
 
   def get_file_url( self, filepath ):
@@ -105,12 +112,12 @@ class VersionDetective:
     
     # Clone repo
     if not self.clone():
-      print 'clone / pull failed. Quitting'
+      print('clone / pull failed. Quitting')
       return False
 
     # Produce list of static files from git log
 
-    print 'Building static files index...'
+    print('Building static files index...')
     filesregex = r'\.(txt|md|js|css|html|xml)$'
 
     pipes = []
@@ -128,7 +135,7 @@ class VersionDetective:
       procs.append( subprocess.Popen(p, stdout=subprocess.PIPE, cwd=self.working_dir, stdin=out, universal_newlines=False) )
 
     out,err = procs[-1].communicate()
-
+    out = out.decode('utf8')
     staticfiles = []
 
     commit = None
@@ -140,7 +147,7 @@ class VersionDetective:
       m = re.match('[AM]\W+(.+)', line)
       if m:
         fname = m.group(1)
-        if 'webroot' in self.settings.keys() and not re.match( self.settings['webroot'], fname ): continue
+        if 'webroot' in list(self.settings.keys()) and not re.match( self.settings['webroot'], fname ): continue
         if re.search( filesregex, fname, re.IGNORECASE ):
           if fname not in staticfiles:
             staticfiles.append(fname)
@@ -148,67 +155,67 @@ class VersionDetective:
     validcommits = {}
     missing = {}
     filecount = 0
-    print str(len(staticfiles)) + ' static files found'
+    print(str(len(staticfiles)) + ' static files found')
     for f in staticfiles:
       if filecount >= 10: break
       # furl = self.url + '/' + f.replace(self.settings['webroot'],'')
       furl = self.get_file_url( f )
       if not furl: continue
-      print furl,
-      r = requests.head(furl)
-      print r.status_code
+      print(furl, end=' ')
+      r = requests.head(furl, headers=self.headers)
+      print(r.status_code)
       if r.status_code == 200:
        
         # Get 
         commit = self.get_most_recent_matching_commit( f )
         if commit:
-          print 'MATCH in: ' + commit
-          print ''
-          if commit not in validcommits.keys(): validcommits[commit] = []
+          print('MATCH in: ' + commit)
+          print('')
+          if commit not in list(validcommits.keys()): validcommits[commit] = []
           validcommits[commit].append(furl)
           filecount += 1
         else:
-          print 'NO MATCH'
-          print ''
+          print('NO MATCH')
+          print('')
 
       # record missing files
       elif r.status_code == 404 and len(validcommits) == 0:
-        if commit not in missing.keys(): missing[commit] = []
+        if commit not in list(missing.keys()): missing[commit] = []
         missing[commit] = furl
       
     # Get dates for each of these commits
     dates = {}
-    for c in validcommits.keys():
+    for c in list(validcommits.keys()):
       p = subprocess.Popen(['git','show','-s','--format=%ci',c], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
       out, err = p.communicate()
-      date = out.strip()
+      date = out.decode('utf8').strip()
       dates[date] = c
     
-    dks = dates.keys()
+    dks = list(dates.keys())
     dks.sort( reverse=True )
-    print ''
-    print 'Found files matching these commits:'
+    print('')
+    print('Found files matching these commits:')
     mostrecent = None
     for d in dks:
       if not mostrecent: 
         mostrecent = d
         currentcommit = dates[d]
       c = dates[d]
-      print ''
-      print d + ': ' + c + ' ('+str(len(validcommits[c]))+' matching files)'
+      print('')
+      print(d + ': ' + c + ' ('+str(len(validcommits[c]))+' matching files)')
       for f in validcommits[c]:
-        print ' - ' + f
+        print(' - ' + f)
     
-    print ''
-    print 'Version Detective concludes that ' + self.url + ' is probably running code no older than ' + mostrecent
+    print('')
+    print('Version Detective concludes that ' + self.url + ' is probably running code no older than ' + mostrecent)
 
     # Is this the current head?
     if currentcommit == self.get_head_id():
-      print 'This is the current HEAD commit (most up to date)'
+      print('This is the current HEAD commit (most up to date)')
     else:
       p = subprocess.Popen(['git','diff','--name-only', currentcommit, 'HEAD'], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
-      changedfiles = p.communicate()[0].splitlines()
-      print 'This is not the current HEAD commit. '+str(len(changedfiles))+' files were changed between this and the current HEAD.'
+      changedfiles = p.communicate()[0].decode('utf8').splitlines()
+      print('This is not the current HEAD commit. '+str(len(changedfiles))+' files were changed between this and the current HEAD.')
       
 
       # Were any static files changed between current commit and HEAD? If not, current commit could be HEAD
@@ -218,14 +225,14 @@ class VersionDetective:
         if re.search( filesregex, f ): changedstatic.append(f)
 
       if len( changedstatic ) == 0:
-        print 'Note that no static files were changed between the current commit and HEAD, so the remote commit could be HEAD, just not detectable through static file analysis.'
+        print('Note that no static files were changed between the current commit and HEAD, so the remote commit could be HEAD, just not detectable through static file analysis.')
 
-      print ''
-      print 'More details:'
-      print ' - List files changed between commits: git --git-dir='+self.working_dir+'/.git diff --name-only ' + currentcommit + ' HEAD'
-      print ' - Complete diff between versions: git --git-dir='+self.working_dir+'/.git diff ' + currentcommit + ' HEAD'
-      print ' - Diff of just changes in PHP files: git --git-dir='+self.working_dir+'/.git diff ' + currentcommit + ' HEAD -- \'*.php\''
-      print ' - Changelog between versions: git --git-dir='+self.working_dir+'/.git log --name-status ' + currentcommit + '...HEAD'
+      print('')
+      print('More details:')
+      print(' - List files changed between commits: git --git-dir='+self.working_dir+'/.git diff --name-only ' + currentcommit + ' HEAD')
+      print(' - Complete diff between versions: git --git-dir='+self.working_dir+'/.git diff ' + currentcommit + ' HEAD')
+      print(' - Diff of just changes in PHP files: git --git-dir='+self.working_dir+'/.git diff ' + currentcommit + ' HEAD -- \'*.php\'')
+      print(' - Changelog between versions: git --git-dir='+self.working_dir+'/.git log --name-status ' + currentcommit + '...HEAD')
     return
 
 
@@ -240,6 +247,7 @@ def main():
   parser.add_argument("-g", "--git", help="Check out this git URL to analyse (if not using --middleware)")
   parser.add_argument("-b", "--branch", help="Which branch of the git repo to use (if not using --middleware)")
   parser.add_argument("-w", "--webroot", help="Directory within the project which corresponds to the web root for static files (if not using --middleware)")
+  parser.add_argument("-H", "--header", help="HTTP request header to include when querying target", nargs='*')
   parser.add_argument("-u", "--url", help="URL of site to compare against")
   args = parser.parse_args()
   
@@ -252,22 +260,22 @@ def main():
     middleware = json.loads(f.read())
 
   if args.list_middleware:
-    print 'Known middleware:'
-    for key, item in middleware.iteritems():
-      print key + ' ('+item['git'],
-      if 'branch' in item.keys():
-        print ':' + item['branch'],
-      print ')'
+    print('Known middleware:')
+    for key, item in middleware.items():
+      print(key + ' ('+item['git'], end=' ')
+      if 'branch' in list(item.keys()):
+        print(':' + item['branch'], end=' ')
+      print(')')
     return
 
   if not args.url:
-    print 'Requires a target URL --url'
+    print('Requires a target URL --url')
     return
   
-  if args.middleware and args.middleware in middleware.keys():
+  if args.middleware and args.middleware in list(middleware.keys()):
     settings = middleware[args.middleware]
   elif not args.git:
-    print 'Requires at least --git or --middleware'
+    print('Requires at least --git or --middleware')
     return
   else:
     settings = {}
@@ -280,6 +288,9 @@ def main():
   
   if args.webroot:
     settings['webroot'] = args.webroot
+
+  if args.header:
+    settings['header'] = args.header 
 
   detective = VersionDetective( args.url, settings )
   detective.analyse()
