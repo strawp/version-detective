@@ -77,7 +77,10 @@ class VersionDetective:
       print(c + ':' + fname)
       p = subprocess.Popen(['git','show',c+':'+fname], stdout=subprocess.PIPE, cwd=self.working_dir, universal_newlines=False)
       out, err = p.communicate()
-      content = out.decode('utf8').splitlines()
+      try:
+        content = out.decode('utf8').splitlines()
+      except:
+        continue
   
       try:
         diff = difflib.unified_diff(remotecontent,content)
